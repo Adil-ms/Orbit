@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+/*
+ * ORBIT design system — derived from UI/UX Pro Max (Travel/Tourism profile: sky blue + adventure
+ * orange, light sky background, slate muted text) plus midnight navy surfaces and a mint reward accent.
+ * Every text/background pair used in the app was checked for >= 4.5:1 contrast.
+ * Rule of thumb: *-600/*-700 shades are for TEXT on light surfaces; base shades are for fills and icons.
+ * Full rationale: design-system/orbit/MASTER.md
+ */
+@theme {
+  /* Ink — text, black pill buttons, selected states */
+  --color-navy: #141414;
+  --color-navy-800: #262626;
+  --color-navy-700: #3a3a3a;
+
+  /* Former "sky" interactive accents now resolve to ink (the reference is monochrome + one accent) */
+  --color-sky: #1f1f1f;
+  --color-sky-600: #141414;
+  --color-sky-50: #f1f1f1;
+
+  /* Coral — the single accent: primary buttons (white text 4.85:1), highlights, progress */
+  --color-orange: #c9441f;
+  --color-orange-600: #b23a18;
+  --color-orange-700: #bf3f1c; /* coral TEXT on light surfaces (5.3:1) */
+  --color-orange-50: #fdeee9;
+
+  /* Former "mint" reward accent → bright coral for fills/progress (ink text on it 5.4:1) */
+  --color-mint: #e8603c;
+  --color-mint-700: #bf3f1c;
+  --color-mint-50: #fdeee9;
+
+  /* Neutral canvas */
+  --color-cream: #f4f4f4;
+  --color-cream-200: #eaeaea;
+
+  --color-success: #10b981;
+  --color-success-700: #047857;
+  --color-success-50: #ecfdf5;
+  --color-muted: #666666; /* 5.2:1 on the canvas */
+  --color-danger: #c53030;
+
+  /* Typography — DM Sans (UI/UX Pro Max "Premium Sans") */
+  --font-display: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Flat depth: hairlines instead of shadows (Swiss style) */
+  --shadow-card: 0 0 0 1px rgb(0 0 0 / 0.04);
+  --shadow-lift: 0 0 0 1px rgb(0 0 0 / 0.05), 0 14px 32px -20px rgb(0 0 0 / 0.22);
+  --shadow-glow: none;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    /* keep keyboard-focused / anchored content clear of the sticky header and mobile bottom nav */
+    scroll-padding-top: 5rem;
+    scroll-padding-bottom: 6rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-cream font-sans text-navy antialiased;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display font-medium tracking-tight;
+    text-wrap: balance;
+  }
+  a, button, [role="button"], [role="radio"], [role="switch"], input, select, label {
+    touch-action: manipulation;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-sky;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+}
+
+/* Hero surface — light band from the reference design (flat, no gradient) */
+.hero-surface {
+  background-color: #ffffff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Horizontal chip rows stay swipeable/scrollable without a visible scrollbar track */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Leaflet sits above page content otherwise; keep it under sticky headers & modals */
+.leaflet-container {
+  z-index: 0;
+  font-family: var(--font-sans);
+}
+.leaflet-div-icon.orbit-pin {
+  background: transparent;
+  border: 0;
+}

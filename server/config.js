@@ -1,0 +1,96 @@
+import crypto from 'node:crypto'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const env = process.env
+
+function list(value, fallback) {
+  if (!value) return fallback
+  return value
+    .split(',')
+    .map((v) => Number(v.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0)
+}
+
+// ── Scoring (server-side source of truth; override with ORBIT_SCORING_JSON) ──
+const DEFAULT_SCORING = {
+  tripCreated: 50,
+  essentialDocumentItem: 20,
+  regularItem: 10,
+  categoryComplete: 50,
+  halfway: 25,
+  fullComplete: 100,
+  earlyBird: 50,
+  // Anti-farming limits
+  minItemsForBonuses: 8, // completion bonuses need a real checklist, not a 1-item one
+  minItemsForCategoryBonus: 2,
+  maxCustomItemAwardsPerTrip: 5, // user-added items earn XP, but only for the first few per trip
+  maxTripCreationAwardsPer30Days: 5,
+  earlyBirdHoursBeforeDeparture: 24,
+}
+
+function scoring() {
+  if (!env.ORBIT_SCORING_JSON) return DEFAULT_SCORING
+  try {
+    return { ...DEFAULT_SCORING, ...JSON.parse(env.ORBIT_SCORING_JSON) }
+  } catch {
+    console.warn('[config] ORBIT_SCORING_JSON is not valid JSON — using default scoring')
+    return DEFAULT_SCORING
+  }
+}
+
+function linkSecret() {
+  if (env.LINK_SIGNING_SECRET) return env.LINK_SIGNING_SECRET
+  if (env.NODE_ENV === 'production') throw new Error('LINK_SIGNING_SECRET must be set in production')
+  // Development: per-process random secret (links stop working after a restart, which is fine locally)
+  return crypto.randomBytes(32).toString('hex')
+}
+
+export function loadConfig(overrides = {}) {
+  const whatsappToken = env.WHATSAPP_ACCESS_TOKEN || ''
+  const appBaseUrl = (env.APP_BASE_URL || 'http://localhost:5174').replace(/\/$/, '')
+  return {
+    env: env.NODE_ENV || 'development',
+    port: Number(env.PORT || 8787),
+    dbPath: env.ORBIT_DB_PATH || path.join(here, 'data', 'orbit.db'),
+    appBaseUrl,
+    linkSecret: linkSecret(),
+    linkTtlHours: Number(env.LINK_TTL_HOURS || 72),
+    secureCookies: env.NODE_ENV === 'production',
+    ai: {
+      enabled: env.ORBIT_AI_ENABLED !== 'false',
+      // The SDK also resolves ANTHROPIC_AUTH_TOKEN / `ant auth login` profiles; we only gate on an explicit opt-in key here
+      hasCredentials: Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN),
+      model: env.ORBIT_AI_MODEL || 'claude-opus-5-5',
+      effort: env.ORBIT_AI_EFFORT || 'medium',
+      timeoutMs: Number(env.ORBIT_AI_TIMEOUT_MS || 60000),
+    },
+    whatsapp: {
+      // "cloud" = WhatsApp Business Platform Cloud API; "mock" = log-only development mode
+      mode: env.WHATSAPP_MODE || (whatsappToken && env.WHATSAPP_PHONE_NUMBER_ID ? 'cloud' : 'mock'),
+      accessToken: whatsappToken,
+      phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || '',
+      apiVersion: env.WHATSAPP_API_VERSION || 'v21.0',
+      reminderTemplate: env.WHATSAPP_TEMPLATE_REMINDER || 'orbit_trip_reminder',
+      updateTemplate: env.WHATSAPP_TEMPLATE_UPDATE || 'orbit_checklist_update',
+      templateLanguage: env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
+      webhookVerifyToken: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '',
+      appSecret: env.WHATSAPP_APP_SECRET || '',
+    },
+    // Web push (backup for WhatsApp). The VAPID subject must be a mailto: or https: URL.
+    push: {
+      publicKey: env.VAPID_PUBLIC_KEY || '',
+      privateKey: env.VAPID_PRIVATE_KEY || '',
+      subject: env.VAPID_SUBJECT || (appBaseUrl.startsWith('https://') ? appBaseUrl : ''),
+    },
+    reminders: {
+      offsetsHours: list(env.REMINDER_OFFSETS_HOURS, [24, 3]),
+      updateBatchSeconds: Number(env.UPDATE_BATCH_SECONDS || 120),
+      maxAttempts: Number(env.JOB_MAX_ATTEMPTS || 4),
+    },
+    schedulerIntervalMs: Number(env.SCHEDULER_INTERVAL_MS || 15000),
+    scoring: scoring(),
+    ...overrides,
+  }
+}
