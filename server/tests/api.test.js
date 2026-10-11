@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import crypto from 'node:crypto'
 import { after, before, describe, test } from 'node:test'
 import { boot, localIn, tripInput } from './helpers.js'
 
@@ -233,52 +232,32 @@ describe('readiness score', () => {
   })
 })
 
-describe('WhatsApp reminders and updates', () => {
+describe('trip reminders (scheduling)', () => {
   let ctx
-  let failMode = null
-  const sent = []
-  before(
-    async () =>
-      (ctx = await boot(
-        {},
-        {
-          fetchImpl: async (url, init) => {
-            sent.push({ url, body: JSON.parse(init.body) })
-            if (failMode === 'transient') return new Response(JSON.stringify({ error: { message: 'busy' } }), { status: 503 })
-            if (failMode === 'permanent') return new Response(JSON.stringify({ error: { message: 'Template not approved' } }), { status: 400 })
-            return new Response(JSON.stringify({ messages: [{ id: `wamid.${sent.length}` }] }), { status: 200 })
-          },
-        },
-      )),
-  )
+  before(async () => (ctx = await boot()))
   after(() => ctx.close())
 
   const jobs = (tripId) => ctx.db.prepare('SELECT * FROM jobs WHERE trip_id = ? ORDER BY id').all(tripId)
-  const withConsent = (extra = {}) =>
-    tripInput({ notifications: { consent: true, whatsapp: '+91 98765 43210', remindersEnabled: true, updatesEnabled: true, offsetsHours: [24, 3] }, ...extra })
+  const withReminders = (extra = {}) => tripInput({ notifications: { remindersEnabled: true, updatesEnabled: true }, ...extra })
 
-  test('consent required: no consent → no number stored and no jobs', async () => {
+  test('reminders are off unless turned on: no jobs, no stored contact details', async () => {
     const a = await ctx.client().login()
-    const r = await a.post('/api/trips', tripInput({ notifications: { consent: false, whatsapp: '+919876543210' } }))
-    assert.equal(r.body.notifications.consent, false)
-    assert.equal(r.body.notifications.whatsappMasked, '')
+    const r = await a.post('/api/trips', tripInput())
+    assert.equal(r.body.notifications.remindersEnabled, false)
     assert.equal(jobs(r.body.trip.id).length, 0)
-  })
-
-  test('consent without a valid number is a field error', async () => {
-    const a = await ctx.client().login()
-    const r = await a.post('/api/trips', tripInput({ notifications: { consent: true, whatsapp: '12' } }))
-    assert.equal(r.status, 400)
-    assert.ok(r.body.details.fields['notifications.whatsapp'])
+    const off = await a.post('/api/trips', tripInput({ notifications: { remindersEnabled: false } }))
+    assert.equal(jobs(off.body.trip.id).length, 0)
+    assert.ok(!('whatsapp_e164' in ctx.db.prepare('SELECT * FROM notification_prefs WHERE trip_id = ?').get(off.body.trip.id)))
   })
 
   test('reminders scheduled at 24h and 3h; past offsets skipped; departure change reschedules without duplicates', async () => {
     const a = await ctx.client().login()
-    const r = await a.post('/api/trips', withConsent())
+    const r = await a.post('/api/trips', withReminders())
     const id = r.body.trip.id
+    assert.equal(r.body.notifications.remindersEnabled, true)
+    assert.equal(r.body.notifications.devices, 0)
     let pending = jobs(id).filter((j) => j.status === 'pending' && j.kind === 'reminder')
     assert.equal(pending.length, 2)
-    assert.equal(r.body.notifications.whatsappMasked.endsWith('3210'), true)
 
     // Same departure again → no new rows
     ctx.notifications.scheduleReminders(ctx.trips.loadTrip(id))
@@ -294,107 +273,36 @@ describe('WhatsApp reminders and updates', () => {
 
   test('rapid checks are batched into a single update job', async () => {
     const a = await ctx.client().login()
-    const { body } = await a.post('/api/trips', withConsent())
+    const { body } = await a.post('/api/trips', withReminders())
     for (const it of body.items.slice(0, 4)) await a.patch(`/api/trips/${body.trip.id}/items/${it.id}`, { completed: true })
     assert.equal(jobs(body.trip.id).filter((j) => j.kind === 'update' && j.status === 'pending').length, 1)
   })
 
-  test('mock mode records the message; status is "mock", never "delivered"', async () => {
-    const mock = await boot()
-    const a = await mock.client().login()
-    const { body } = await a.post('/api/trips', withConsent())
-    await a.patch(`/api/trips/${body.trip.id}/items/${body.items[0].id}`, { completed: true })
-    mock.db.prepare('UPDATE jobs SET run_at = 0 WHERE trip_id = ?').run(body.trip.id)
-    await mock.notifications.tick()
-    const msgs = (await a.get(`/api/trips/${body.trip.id}/messages`)).body.messages
-    assert.ok(msgs.length >= 1)
-    assert.ok(msgs.every((m) => m.status === 'mock'))
-    assert.ok(!JSON.stringify(msgs).includes('98765'), 'full number never exposed')
-    await mock.close()
-  })
-
-  test('cloud mode: transient failure retries with backoff; permanent failure stops; delivery only via signed webhook', async () => {
-    const cloud = await boot(
-      { whatsapp: { ...ctx.config.whatsapp, mode: 'cloud', accessToken: 't', phoneNumberId: '123' } },
-      { fetchImpl: (u, i) => globalThis.__fakeFetch(u, i) },
-    )
-    globalThis.__fakeFetch = async (url, init) => {
-      sent.push({ url, body: JSON.parse(init.body) })
-      if (failMode === 'transient') return new Response('{"error":{"message":"busy"}}', { status: 503 })
-      if (failMode === 'permanent') return new Response('{"error":{"message":"Template not approved"}}', { status: 400 })
-      return new Response(JSON.stringify({ messages: [{ id: 'wamid.ok' }] }), { status: 200 })
-    }
-    const a = await cloud.client().login()
-    const { body } = await a.post('/api/trips', withConsent())
-    const tripId = body.trip.id
-    const reminder = cloud.db.prepare(`SELECT * FROM jobs WHERE trip_id = ? AND kind='reminder' ORDER BY run_at LIMIT 1`).get(tripId)
-
-    failMode = 'transient'
-    cloud.db.prepare('UPDATE jobs SET run_at = 0 WHERE id = ?').run(reminder.id)
-    await cloud.notifications.tick()
-    let job = cloud.db.prepare('SELECT * FROM jobs WHERE id = ?').get(reminder.id)
-    assert.equal(job.status, 'pending')
-    assert.equal(job.attempts, 1)
-    assert.ok(job.run_at > Date.now())
-
-    failMode = 'permanent'
-    cloud.db.prepare('UPDATE jobs SET run_at = 0 WHERE id = ?').run(reminder.id)
-    await cloud.notifications.tick()
-    job = cloud.db.prepare('SELECT * FROM jobs WHERE id = ?').get(reminder.id)
-    assert.equal(job.status, 'failed')
-
-    failMode = null
-    const other = cloud.db.prepare(`SELECT * FROM jobs WHERE trip_id = ? AND kind='reminder' AND status='pending'`).get(tripId)
-    cloud.db.prepare('UPDATE jobs SET run_at = 0 WHERE id = ?').run(other.id)
-    await cloud.notifications.tick()
-    const last = sent.at(-1).body
-    assert.equal(last.type, 'template')
-    assert.equal(last.template.name, 'orbit_trip_reminder')
-    assert.ok(last.template.components[0].parameters.every((p) => !p.text.includes('\n')), 'template params have no newlines')
-    let log = cloud.db.prepare(`SELECT * FROM message_log WHERE provider_message_id = 'wamid.ok'`).get()
-    assert.equal(log.status, 'accepted')
-
-    // Webhook: bad signature rejected
-    const payload = JSON.stringify({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.ok', status: 'delivered' }] } }] }] })
-    const bad = await fetch(`${cloud.base}/api/webhooks/whatsapp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': 'sha256=nope' }, body: payload })
-    assert.equal(bad.status, 401)
-    const sign = (p) => `sha256=${crypto.createHmac('sha256', 'app-secret').update(p).digest('hex')}`
-    const ok = await fetch(`${cloud.base}/api/webhooks/whatsapp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': sign(payload) }, body: payload })
-    assert.equal(ok.status, 200)
-    log = cloud.db.prepare(`SELECT * FROM message_log WHERE provider_message_id = 'wamid.ok'`).get()
-    assert.equal(log.status, 'delivered')
-
-    // Out-of-order "sent" after "delivered" does not downgrade
-    const late = JSON.stringify({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.ok', status: 'sent' }] } }] }] })
-    await fetch(`${cloud.base}/api/webhooks/whatsapp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': sign(late) }, body: late })
-    assert.equal(cloud.db.prepare(`SELECT status FROM message_log WHERE provider_message_id = 'wamid.ok'`).get().status, 'delivered')
-
-    // Webhook verification handshake
-    const hs = await fetch(`${cloud.base}/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=42`)
-    assert.equal(await hs.text(), '42')
-    await cloud.close()
-  })
-
-  test('changing preferences can keep the stored number without resending it', async () => {
+  test('the schedule is fixed server-side; turning reminders and updates off cancels pending jobs', async () => {
     const a = await ctx.client().login()
-    const { body } = await a.post('/api/trips', withConsent())
-    const r = await a.put(`/api/trips/${body.trip.id}/notifications`, { consent: true, keepNumber: true, remindersEnabled: true, updatesEnabled: false, offsetsHours: [24] })
+    const { body } = await a.post('/api/trips', withReminders())
+    const id = body.trip.id
+    const r = await a.put(`/api/trips/${id}/notifications`, { remindersEnabled: true, updatesEnabled: true, offsetsHours: [1] })
     assert.equal(r.status, 200)
-    assert.ok(r.body.notifications.whatsappMasked.endsWith('3210'))
-    // Reminders are always on with the fixed schedule, whatever the client sends
     assert.deepEqual(r.body.notifications.offsetsHours, [24, 3])
-    const off = await a.put(`/api/trips/${body.trip.id}/notifications`, { consent: true, keepNumber: true, remindersEnabled: false, offsetsHours: [] })
-    assert.equal(off.body.notifications.remindersEnabled, true)
-    assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE trip_id = ? AND kind = 'reminder' AND status = 'pending'").get(body.trip.id).n, 2)
+
+    await a.patch(`/api/trips/${id}/items/${body.items[0].id}`, { completed: true })
+    const off = await a.put(`/api/trips/${id}/notifications`, { remindersEnabled: false, updatesEnabled: false })
+    assert.equal(off.body.notifications.remindersEnabled, false)
+    assert.equal(jobs(id).filter((j) => j.status === 'pending').length, 0)
+
+    // Back on → the same reminders are re-activated, not duplicated
+    await a.put(`/api/trips/${id}/notifications`, { remindersEnabled: true, updatesEnabled: false })
+    assert.equal(jobs(id).filter((j) => j.kind === 'reminder' && j.status === 'pending').length, 2)
+    assert.equal(jobs(id).filter((j) => j.kind === 'reminder').length, 2)
   })
 
-  test('opting out cancels pending jobs and forgets the number', async () => {
-    const a = await ctx.client().login()
-    const { body } = await a.post('/api/trips', withConsent())
-    const r = await a.put(`/api/trips/${body.trip.id}/notifications`, { consent: false })
-    assert.equal(r.body.notifications.consent, false)
-    assert.equal(jobs(body.trip.id).filter((j) => j.status === 'pending').length, 0)
-    assert.equal(ctx.db.prepare('SELECT whatsapp_e164 FROM notification_prefs WHERE trip_id = ?').get(body.trip.id).whatsapp_e164, null)
+  test('only the owner can change reminders', async () => {
+    const owner = await ctx.client().login()
+    const other = await ctx.client().login()
+    const { body } = await owner.post('/api/trips', withReminders())
+    const r = await other.put(`/api/trips/${body.trip.id}/notifications`, { remindersEnabled: false })
+    assert.ok([403, 404].includes(r.status))
   })
 })
 

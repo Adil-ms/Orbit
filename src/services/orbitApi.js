@@ -21,7 +21,7 @@ export function ensureSession() {
   return sessionPromise
 }
 
-// Signed links from WhatsApp grant access to one trip. Kept for this tab only.
+// Signed trip links (opened from a notification) grant access to one trip. Kept for this tab only.
 const LINK_KEY = 'orbit-trip-links'
 const readLinks = () => {
   try {

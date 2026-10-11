@@ -1,17 +1,17 @@
 import crypto from 'node:crypto'
 import { transaction } from '../db.js'
-import { maskPhone } from '../lib/http.js'
+import { renderNotification } from './messages.js'
 import { computeReadiness } from './readiness.js'
-import { renderMessage } from './whatsapp.js'
 
 const BACKOFF_MS = [60000, 5 * 60000, 15 * 60000, 60 * 60000]
 
 /**
- * Notification scheduling + durable job runner.
+ * Trip notifications (web push) + durable job runner.
  * - Reminders: one job per (trip, offset, departure time) — the UNIQUE dedupe key prevents duplicates.
  * - Updates: at most one pending update job per trip; rapid checks are batched into it.
+ * Each message goes to every device where the trip owner turned notifications on.
  */
-export function createNotifications({ db, config, whatsapp, push, links, loadTrip, loadItems }) {
+export function createNotifications({ db, config, push, links, loadTrip, loadItems }) {
   const now = () => Date.now()
 
   function prefsFor(tripId) {
@@ -29,7 +29,7 @@ export function createNotifications({ db, config, whatsapp, push, links, loadTri
     transaction(db, () => {
       cancelPending(trip.id, 'reminder')
       const p = prefsFor(trip.id)
-      if (!p || !p.consent || !p.reminders_enabled || !p.whatsapp_e164) return
+      if (!p?.reminders_enabled) return
       const offsets = p.offsets_hours.split(',').map(Number).filter((n) => n > 0)
       for (const h of offsets) {
         const runAt = trip.departureAt - h * 3600000
@@ -49,7 +49,7 @@ export function createNotifications({ db, config, whatsapp, push, links, loadTri
   /** Called after a checklist change. Batches rapid changes into a single pending update. */
   function queueUpdate(trip) {
     const p = prefsFor(trip.id)
-    if (!p || !p.consent || !p.updates_enabled || !p.whatsapp_e164) return null
+    if (!p?.updates_enabled) return null
     const pending = db.prepare(`SELECT id FROM jobs WHERE trip_id = ? AND kind = 'update' AND status = 'pending'`).get(trip.id)
     if (pending) return pending.id // already batched — it renders the latest state when it runs
     const t = now()
@@ -78,18 +78,6 @@ export function createNotifications({ db, config, whatsapp, push, links, loadTri
     })
   }
 
-  /** Backup channel: shows the message in the notification bar of the owner's subscribed devices. */
-  async function sendPushBackup(job, trip, rendered, link) {
-    if (!push?.enabled) return
-    const r = await push.notifyUser(trip.userId, { ...rendered.push, url: link, tag: `orbit-${job.kind}-${trip.id}` })
-    if (!r.sent && !r.failed) return // no devices subscribed
-    const t = now()
-    db.prepare(
-      `INSERT INTO message_log (job_id, trip_id, provider, to_masked, kind, body_preview, status, error, created_at, updated_at)
-       VALUES (?, ?, 'webpush', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(job.id, trip.id, `${r.sent + r.failed} device${r.sent + r.failed === 1 ? '' : 's'}`, job.kind, `${rendered.push.title}\n${rendered.push.body}`, r.sent ? 'sent' : 'failed', r.error, t, t)
-  }
-
   function finish(job, status, error = null) {
     db.prepare('UPDATE jobs SET status = ?, last_error = ?, locked_at = NULL, updated_at = ? WHERE id = ?').run(status, error, now(), job.id)
   }
@@ -97,40 +85,27 @@ export function createNotifications({ db, config, whatsapp, push, links, loadTri
   async function processJob(job) {
     const trip = loadTrip(job.trip_id)
     const p = prefsFor(job.trip_id)
-    if (!trip || !p || !p.consent || !p.whatsapp_e164) return finish(job, 'skipped', 'No consent or trip removed')
-    if (job.kind === 'reminder' && !p.reminders_enabled) return finish(job, 'skipped', 'Reminders disabled')
-    if (job.kind === 'update' && !p.updates_enabled) return finish(job, 'skipped', 'Updates disabled')
+    if (!trip || !p) return finish(job, 'skipped', 'Trip removed')
+    if (job.kind === 'reminder' && !p.reminders_enabled) return finish(job, 'skipped', 'Reminders turned off')
+    if (job.kind === 'update' && !p.updates_enabled) return finish(job, 'skipped', 'Updates turned off')
     if (trip.departureAt <= now()) return finish(job, 'skipped', 'Trip already departed')
 
-    const items = loadItems(trip.id)
-    const readiness = computeReadiness(items)
-    const link = links.tripUrl(trip.id)
-    const rendered = renderMessage(job.kind, { trip, items, readiness, link })
-    const t = now()
+    const message = renderNotification(job.kind, { trip, readiness: computeReadiness(loadItems(trip.id)) })
+    const r = await push.notifyUser(trip.userId, { ...message, url: links.tripUrl(trip.id), tag: `orbit-${job.kind}-${trip.id}` })
+    if (!r.sent && !r.failed) return finish(job, 'skipped', r.error ?? 'No devices have notifications turned on')
 
-    try {
-      const result = await whatsapp.send({ to: p.whatsapp_e164, kind: job.kind, rendered })
-      db.prepare(
-        `INSERT INTO message_log (job_id, trip_id, provider, provider_message_id, to_masked, kind, body_preview, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(job.id, trip.id, result.provider, result.providerMessageId, maskPhone(p.whatsapp_e164), job.kind, rendered.text, result.status, t, t)
-      finish(job, 'sent')
-    } catch (err) {
-      db.prepare(
-        `INSERT INTO message_log (job_id, trip_id, provider, to_masked, kind, body_preview, status, error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'failed', ?, ?, ?)`,
-      ).run(job.id, trip.id, whatsapp.mode, maskPhone(p.whatsapp_e164), job.kind, rendered.text, String(err.message).slice(0, 300), t, t)
-      // WhatsApp didn't take it: send the push backup once (on the first failure, so time-sensitive reminders aren't delayed by retries)
-      if (job.attempts === 1) await sendPushBackup(job, trip, rendered, link)
-      if (err.permanent || job.attempts >= job.max_attempts) return finish(job, 'failed', String(err.message).slice(0, 300))
-      const delay = BACKOFF_MS[Math.min(job.attempts - 1, BACKOFF_MS.length - 1)]
-      db.prepare(`UPDATE jobs SET status = 'pending', run_at = ?, last_error = ?, locked_at = NULL, updated_at = ? WHERE id = ?`).run(
-        now() + delay,
-        String(err.message).slice(0, 300),
-        now(),
-        job.id,
-      )
-    }
+    const t = now()
+    const devices = r.sent + r.failed
+    db.prepare(
+      `INSERT INTO message_log (job_id, trip_id, provider, to_masked, kind, body_preview, status, error, created_at, updated_at)
+       VALUES (?, ?, 'webpush', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(job.id, trip.id, `${devices} device${devices === 1 ? '' : 's'}`, job.kind, `${message.title}\n${message.body}`, r.sent ? 'sent' : 'failed', r.error, t, t)
+    if (r.sent) return finish(job, 'sent')
+
+    // Every device failed: retry with backoff, then give up
+    if (job.attempts >= job.max_attempts) return finish(job, 'failed', r.error)
+    const delay = BACKOFF_MS[Math.min(job.attempts - 1, BACKOFF_MS.length - 1)]
+    db.prepare(`UPDATE jobs SET status = 'pending', run_at = ?, last_error = ?, locked_at = NULL, updated_at = ? WHERE id = ?`).run(now() + delay, r.error, now(), job.id)
   }
 
   async function tick() {
@@ -147,17 +122,5 @@ export function createNotifications({ db, config, whatsapp, push, links, loadTri
   }
   const stop = () => clearInterval(timer)
 
-  /** Applies provider status webhooks. Only these can move a message to delivered/read. */
-  function applyStatus({ id, status, errorTitle }) {
-    const rank = { accepted: 0, sent: 1, delivered: 2, read: 3, failed: 4 }
-    if (!id || !(status in rank) || status === 'accepted') return 0
-    const row = db.prepare('SELECT id, status FROM message_log WHERE provider_message_id = ?').get(id)
-    // Webhooks can arrive out of order — never move a message backwards (e.g. delivered → sent)
-    if (!row || (rank[row.status] ?? -1) >= rank[status]) return 0
-    return db
-      .prepare('UPDATE message_log SET status = ?, error = COALESCE(?, error), updated_at = ? WHERE id = ?')
-      .run(status, errorTitle ?? null, now(), row.id).changes
-  }
-
-  return { scheduleReminders, queueUpdate, cancelPending, tick, start, stop, applyStatus, prefsFor }
+  return { scheduleReminders, queueUpdate, cancelPending, tick, start, stop, prefsFor }
 }

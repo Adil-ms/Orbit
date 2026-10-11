@@ -4,8 +4,7 @@ export const CATEGORIES = ['documents', 'tickets', 'health', 'money', 'electroni
 export const IMPORTANCE = ['critical', 'high', 'normal', 'optional']
 export const PURPOSES = ['tourism', 'business', 'study', 'work', 'medical', 'other']
 
-const CHECK_NOTE =
-  'ORBIT can’t confirm whether this applies to you. Check the official source for your destination and purpose.'
+const CHECK_NOTE =''
 
 /**
  * Deterministic baseline checklist. Entry requirements are never asserted — they are
@@ -60,13 +59,13 @@ export function buildRuleChecklist({ destinationCountry, purpose }) {
 
   // ── 3. Health & medical ─────────────────────────────────────────────────
   add('health', 'Prescribed medication in original packaging', 'high', {
-    note: 'Carry prescriptions. Some medicines are restricted abroad — check destination rules.',
+    note: '',
   })
   add('health', 'Health insurance card', 'high')
   add('health', 'Basic first-aid kit', 'normal')
   add('health', 'Vaccination records — check if any are required', 'high', {
     ...requirement({ sourceUrl: null, sourceLabel: null, sourceAddedOn: null }),
-    note: 'Some destinations require proof of certain vaccinations. Check official health guidance for your route.',
+    note: '',
   })
 
   // ── 4. Money & payments ─────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { transaction } from '../db.js'
-import { HttpError, maskPhone, newId, normalizeE164, validate } from '../lib/http.js'
+import { HttpError, newId, validate } from '../lib/http.js'
 import { isValidTimeZone, zonedLocalToUtc } from '../lib/time.js'
 import { suggestWithAi } from './ai.js'
 import { buildRuleChecklist, CATEGORIES, IMPORTANCE, PURPOSES } from './checklistRules.js'
@@ -29,12 +29,8 @@ const optionalText = (max) =>
     .transform((v) => (v ? v : null))
 
 const notificationsSchema = z.object({
-  consent: z.boolean(),
-  whatsapp: z.string().trim().max(24).optional().nullable(),
-  keepNumber: z.boolean().optional(), // keep the stored number instead of sending it back to the client
   remindersEnabled: z.boolean().default(true),
   updatesEnabled: z.boolean().default(false),
-  offsetsHours: z.array(z.number().int().min(1).max(168)).max(4).default([24, 3]),
 })
 
 const tripCreateSchema = z.object({
@@ -76,9 +72,6 @@ const itemUpdateSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, 'Nothing to update')
 
-const CONSENT_TEXT =
-  'I agree to receive WhatsApp messages from ORBIT about this trip (reminders and optional checklist updates). I can turn them off at any time.'
-
 // ── Row mappers ────────────────────────────────────────────────────────────
 export const toTrip = (r) =>
   r && {
@@ -116,7 +109,7 @@ export const toItem = (r) => ({
   position: r.position,
 })
 
-export function createTripsService({ db, config, gamification, notifications }) {
+export function createTripsService({ db, config, gamification, notifications, push }) {
   const loadTripRow = db.prepare('SELECT * FROM trips WHERE id = ?')
   const loadItemsStmt = db.prepare('SELECT * FROM checklist_items WHERE trip_id = ? ORDER BY category, position, created_at')
   const insertActivity = db.prepare('INSERT INTO activity (user_id, trip_id, type, message, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -165,46 +158,32 @@ export function createTripsService({ db, config, gamification, notifications }) 
 
   function savePrefs(trip, input, now) {
     const n = validate(notificationsSchema, input)
-    const existing = notifications.prefsFor(trip.id)
-    const phone = n.whatsapp ? normalizeE164(n.whatsapp) : n.keepNumber ? (existing?.whatsapp_e164 ?? null) : null
-    if (n.consent && !phone) {
-      throw new HttpError(400, 'Please check the highlighted fields.', {
-        fields: { 'notifications.whatsapp': 'Enter a WhatsApp number with country code, e.g. +91 98765 43210' },
-      })
-    }
     db.prepare(
-      `INSERT INTO notification_prefs (trip_id, user_id, whatsapp_e164, consent, consent_at, consent_text, reminders_enabled, updates_enabled, offsets_hours, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(trip_id) DO UPDATE SET whatsapp_e164 = excluded.whatsapp_e164, consent = excluded.consent,
-         consent_at = excluded.consent_at, consent_text = excluded.consent_text, reminders_enabled = excluded.reminders_enabled,
-         updates_enabled = excluded.updates_enabled, offsets_hours = excluded.offsets_hours, updated_at = excluded.updated_at`,
+      `INSERT INTO notification_prefs (trip_id, user_id, reminders_enabled, updates_enabled, offsets_hours, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(trip_id) DO UPDATE SET reminders_enabled = excluded.reminders_enabled, updates_enabled = excluded.updates_enabled,
+         offsets_hours = excluded.offsets_hours, updated_at = excluded.updated_at`,
     ).run(
       trip.id,
       trip.userId,
-      n.consent ? phone : null, // without consent we don't keep the number
-      n.consent ? 1 : 0,
-      n.consent ? (existing?.consent ? existing.consent_at : now) : null,
-      n.consent ? CONSENT_TEXT : null,
-      1, // reminders are always on while a WhatsApp number is saved
+      n.remindersEnabled ? 1 : 0,
       n.updatesEnabled ? 1 : 0,
       config.reminders.offsetsHours.join(','), // fixed schedule (REMINDER_OFFSETS_HOURS)
       now,
     )
-    if (!n.consent) notifications.cancelPending(trip.id)
-    notifications.scheduleReminders(trip)
+    if (!n.updatesEnabled) notifications.cancelPending(trip.id, 'update')
+    notifications.scheduleReminders(trip) // also cancels pending reminders when they're turned off
   }
 
-  function publicPrefs(tripId) {
+  function publicPrefs(tripId, userId) {
     const p = notifications.prefsFor(tripId)
     return {
-      consent: Boolean(p?.consent),
-      consentAt: p?.consent_at ?? null,
-      whatsappMasked: maskPhone(p?.whatsapp_e164),
-      remindersEnabled: true,
+      remindersEnabled: Boolean(p?.reminders_enabled),
       updatesEnabled: Boolean(p?.updates_enabled),
       offsetsHours: p ? p.offsets_hours.split(',').map(Number) : config.reminders.offsetsHours,
-      mode: config.whatsapp.mode,
-      consentText: CONSENT_TEXT,
+      // How many of the owner's devices will receive them (0 = turn notifications on somewhere)
+      devices: push.count(userId),
+      pushAvailable: push.enabled,
     }
   }
 
@@ -215,7 +194,7 @@ export function createTripsService({ db, config, gamification, notifications }) 
       trip,
       items,
       readiness: computeReadiness(items),
-      notifications: isOwner ? publicPrefs(trip.id) : null,
+      notifications: isOwner ? publicPrefs(trip.id, trip.userId) : null,
       xpByItem: Object.fromEntries(items.map((i) => [i.id, i.origin === 'user' ? config.scoring.regularItem : gamification.itemXp(i)])),
       awardedItems: db
         .prepare(`SELECT event_key FROM xp_ledger WHERE trip_id = ? AND event_key LIKE 'item:%'`)
@@ -416,7 +395,7 @@ export function createTripsService({ db, config, gamification, notifications }) 
     const trip = authorize(req, tripId)
     if (trip.userId !== req.user?.id) throw new HttpError(403, 'Only the trip owner can change notifications.')
     savePrefs(trip, input, Date.now())
-    return publicPrefs(tripId)
+    return publicPrefs(tripId, trip.userId)
   }
 
   function messages(req, tripId) {

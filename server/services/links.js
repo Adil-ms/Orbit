@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 
 /**
- * Signed, expiring, single-trip capability links for WhatsApp messages.
+ * Signed, expiring, single-trip capability links (opened from trip notifications).
  * The token contains only the trip id and expiry — no personal data.
  */
 export function createLinks(config) {

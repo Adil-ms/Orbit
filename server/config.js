@@ -48,7 +48,6 @@ function linkSecret() {
 }
 
 export function loadConfig(overrides = {}) {
-  const whatsappToken = env.WHATSAPP_ACCESS_TOKEN || ''
   const appBaseUrl = (env.APP_BASE_URL || 'http://localhost:5174').replace(/\/$/, '')
   return {
     env: env.NODE_ENV || 'development',
@@ -66,19 +65,7 @@ export function loadConfig(overrides = {}) {
       effort: env.ORBIT_AI_EFFORT || 'medium',
       timeoutMs: Number(env.ORBIT_AI_TIMEOUT_MS || 60000),
     },
-    whatsapp: {
-      // "cloud" = WhatsApp Business Platform Cloud API; "mock" = log-only development mode
-      mode: env.WHATSAPP_MODE || (whatsappToken && env.WHATSAPP_PHONE_NUMBER_ID ? 'cloud' : 'mock'),
-      accessToken: whatsappToken,
-      phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID || '',
-      apiVersion: env.WHATSAPP_API_VERSION || 'v21.0',
-      reminderTemplate: env.WHATSAPP_TEMPLATE_REMINDER || 'orbit_trip_reminder',
-      updateTemplate: env.WHATSAPP_TEMPLATE_UPDATE || 'orbit_checklist_update',
-      templateLanguage: env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
-      webhookVerifyToken: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '',
-      appSecret: env.WHATSAPP_APP_SECRET || '',
-    },
-    // Web push (backup for WhatsApp). The VAPID subject must be a mailto: or https: URL.
+    // Web push for trip reminders. The VAPID subject must be a mailto: or https: URL.
     push: {
       publicKey: env.VAPID_PUBLIC_KEY || '',
       privateKey: env.VAPID_PRIVATE_KEY || '',

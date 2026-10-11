@@ -1,9 +1,10 @@
 import { useId, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowLeft, ArrowRight, BellRing, Check, Globe2, MapPin, MessageCircle, Plane, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BellRing, Check, Globe2, MapPin, Plane } from 'lucide-react'
 import Mascot from '../components/mascot/Mascot'
 import Notice from '../components/ui/Notice'
+import PushDeviceControl from '../components/trips/PushDeviceControl'
 import { COUNTRIES, POPULAR_DESTINATIONS, PURPOSES, TIME_ZONES, countryName, guessTimeZone } from '../data/trips'
 import { api } from '../services/orbitApi'
 import { buttonClass, cn } from '../lib/ui'
@@ -14,7 +15,7 @@ const STEPS = [
   { id: 'remind', label: 'Reminders', icon: BellRing },
 ]
 // Which step owns each server-side field (for routing validation errors back)
-const FIELD_STEP = { destinationCity: 0, destinationCountry: 0, name: 0, departureLocal: 1, departureTz: 1, purpose: 1, 'notifications.whatsapp': 2 }
+const FIELD_STEP = { destinationCity: 0, destinationCountry: 0, name: 0, departureLocal: 1, departureTz: 1, purpose: 1 }
 
 const inputCls =
   'h-12 w-full rounded-xl bg-white px-4 text-[15px] text-navy ring-1 ring-navy/15 placeholder:text-muted/80 focus:ring-2 focus:ring-sky focus:outline-none aria-invalid:ring-2 aria-invalid:ring-danger'
@@ -44,7 +45,7 @@ const today = () => new Date().toISOString().slice(0, 10)
 
 export default function TripSetup() {
   const navigate = useNavigate()
-  const ids = { city: useId(), country: useId(), name: useId(), date: useId(), time: useId(), tz: useId(), phone: useId() }
+  const ids = { city: useId(), country: useId(), name: useId(), date: useId(), time: useId(), tz: useId() }
   const [step, setStep] = useState(0)
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
@@ -57,8 +58,7 @@ export default function TripSetup() {
     time: '09:00',
     departureTz: guessTimeZone(),
     purpose: 'tourism',
-    consent: false,
-    whatsapp: '',
+    remindersEnabled: true,
     updatesEnabled: false,
   })
   const set = (patch) => {
@@ -78,10 +78,6 @@ export default function TripSetup() {
       if (form.date && form.time && new Date(`${form.date}T${form.time}`) < new Date(Date.now() - 3600000) && form.departureTz === guessTimeZone()) {
         e.date = 'Departure must be in the future.'
       }
-    }
-    if (i === 2 && form.consent) {
-      const digits = form.whatsapp.replace(/[^\d+]/g, '')
-      if (!/^\+[1-9]\d{7,14}$/.test(digits)) e.whatsapp = 'Enter your number with country code, e.g. +91 98765 43210.'
     }
     setErrors(e)
     return Object.keys(e).length === 0
@@ -105,19 +101,14 @@ export default function TripSetup() {
         purpose: form.purpose,
         departureLocal: `${form.date}T${form.time}`,
         departureTz: form.departureTz,
-        notifications: {
-          consent: form.consent,
-          whatsapp: form.consent ? form.whatsapp : null,
-          remindersEnabled: true,
-          updatesEnabled: form.updatesEnabled,
-        },
+        notifications: { remindersEnabled: form.remindersEnabled, updatesEnabled: form.updatesEnabled },
       })
       navigate(`/trips/${res.trip.id}`, { state: { welcome: true } })
     } catch (err) {
       setSubmitting(false)
       if (err.fields) {
         const mapped = Object.fromEntries(
-          Object.entries(err.fields).map(([k, v]) => [k === 'departureLocal' ? 'date' : k === 'notifications.whatsapp' ? 'whatsapp' : k, v]),
+          Object.entries(err.fields).map(([k, v]) => [k === 'departureLocal' ? 'date' : k, v]),
         )
         setErrors(mapped)
         const first = Math.min(...Object.keys(err.fields).map((k) => FIELD_STEP[k] ?? step))
@@ -311,61 +302,25 @@ export default function TripSetup() {
                 {step === 2 && (
                   <>
                     <div className="flex items-start gap-3 rounded-2xl bg-cream p-4">
-                      <MessageCircle className="mt-0.5 size-5 shrink-0 text-success-700" />
+                      <BellRing className="mt-0.5 size-5 shrink-0 text-orange-700" />
                       <div className="text-sm leading-relaxed text-navy">
-                        <p className="font-bold">WhatsApp reminders (optional)</p>
-                        <p className="text-muted">Get a nudge before you leave with your checklist progress and what’s still unchecked. Health items and anything you type yourself are never included in messages.</p>
+                        <p className="font-bold">Trip reminders (optional)</p>
+                        <p className="text-muted">Get a notification on your phone before you leave, with your checklist progress. Item names are never shown on your lock screen.</p>
                       </div>
                     </div>
-                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl p-1">
-                      <input
-                        type="checkbox"
-                        checked={form.consent}
-                        onChange={(e) => set({ consent: e.target.checked })}
-                        className="mt-1 size-5 shrink-0 cursor-pointer accent-navy"
-                      />
-                      <span className="text-[15px] text-navy">
-                        I agree to receive WhatsApp messages from ORBIT about this trip (reminders and optional checklist updates). I can turn them off at any time.
-                      </span>
-                    </label>
-                    {form.consent && (
-                      <div className="space-y-5 border-t border-navy/8 pt-5">
-                        <Field id={ids.phone} label="WhatsApp number" required hint="Include your country code." error={errors.whatsapp}>
-                          <input
-                            id={ids.phone}
-                            type="tel"
-                            inputMode="tel"
-                            autoComplete="tel"
-                            value={form.whatsapp}
-                            onChange={(e) => set({ whatsapp: e.target.value })}
-                            placeholder="+91 98765 43210"
-                            maxLength={24}
-                            aria-invalid={Boolean(errors.whatsapp)}
-                            aria-describedby={errors.whatsapp ? `${ids.phone}-error` : `${ids.phone}-hint`}
-                            className={inputCls}
-                            autoFocus
-                          />
-                        </Field>
-                        <p className="flex items-start gap-2 rounded-xl bg-success-50 p-3 text-[15px] text-navy">
-                          <BellRing className="mt-0.5 size-4 shrink-0 text-success-700" />
-                          Reminders are always on: you’ll get one 24 hours and one 3 hours before departure.
-                        </p>
-                        <fieldset className="space-y-2">
-                          <legend className="text-sm font-bold text-navy">Also send me</legend>
-                          {[
-                            ['updatesEnabled', 'A short update when I check items (batched, at most one every 2 minutes)'],
-                          ].map(([key, text]) => (
-                            <label key={key} className="flex min-h-11 cursor-pointer items-center gap-3">
-                              <input type="checkbox" checked={form[key]} onChange={(e) => set({ [key]: e.target.checked })} className="size-5 cursor-pointer accent-navy" />
-                              <span className="text-[15px]">{text}</span>
-                            </label>
-                          ))}
-                        </fieldset>
-                      </div>
-                    )}
-                    <p className="flex items-start gap-2 text-xs text-muted">
-                      <ShieldCheck className="mt-px size-4 shrink-0 text-success-700" /> Your number is stored on ORBIT’s server only to send these messages, and is deleted if you turn WhatsApp off.
-                    </p>
+                    <fieldset className="space-y-2">
+                      <legend className="sr-only">Notifications for this trip</legend>
+                      {[
+                        ['remindersEnabled', 'Remind me 24 hours and 3 hours before departure'],
+                        ['updatesEnabled', 'A short update when I check items (batched, at most one every 2 minutes)'],
+                      ].map(([key, text]) => (
+                        <label key={key} className="flex min-h-11 cursor-pointer items-center gap-3">
+                          <input type="checkbox" checked={form[key]} onChange={(e) => set({ [key]: e.target.checked })} className="size-5 shrink-0 cursor-pointer accent-navy" />
+                          <span className="text-[15px]">{text}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                    {(form.remindersEnabled || form.updatesEnabled) && <PushDeviceControl />}
                   </>
                 )}
               </motion.div>
@@ -404,8 +359,7 @@ export default function TripSetup() {
             <p className="mt-4 font-display text-xl font-semibold">
               {step === 0 && 'Ready for your next adventure?'}
               {step === 1 && 'When do we take off?'}
-              {step === 2 && 'This helps me check the right documents.'}
-              {step === 3 && 'Want me to nudge you before you leave?'}
+              {step === 2 && 'Want me to nudge you before you leave?'}
             </p>
             {form.destinationCity && (
               <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-cream px-3 py-1 text-sm font-semibold">

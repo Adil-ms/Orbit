@@ -57,7 +57,7 @@ export default function ChecklistTeaser() {
                 {trips.length ? 'Plan your next trip checklist' : 'Never leave without the essentials'}
               </h2>
               <p className="mt-1 max-w-xl text-muted">
-                Get a personalised packing and documents checklist, and WhatsApp reminders before you leave.
+                Get a personalised packing and documents checklist, and reminders on your phone before you leave.
               </p>
             </>
           )}

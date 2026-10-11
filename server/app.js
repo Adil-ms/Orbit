@@ -1,4 +1,3 @@
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,34 +12,29 @@ import { createLinks } from './services/links.js'
 import { createNotifications } from './services/notifications.js'
 import { createPush } from './services/push.js'
 import { createTripsService, toItem, toTrip } from './services/trips.js'
-import { createWhatsApp } from './services/whatsapp.js'
 
 const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 
-/** Builds the app. Everything is injectable so tests can use an in-memory DB and a fake WhatsApp transport. */
-export function createApp(config, { db = openDatabase(config.dbPath), fetchImpl, pushSendImpl } = {}) {
+/** Builds the app. Everything is injectable so tests can use an in-memory DB and a fake push transport. */
+export function createApp(config, { db = openDatabase(config.dbPath), pushSendImpl } = {}) {
   const links = createLinks(config)
-  const whatsapp = createWhatsApp(config, fetchImpl)
   const push = createPush({ db, config, sendImpl: pushSendImpl })
   const gamification = createGamification(db, config)
   const notifications = createNotifications({
     db,
     config,
-    whatsapp,
     push,
     links,
     loadTrip: (id) => toTrip(db.prepare('SELECT * FROM trips WHERE id = ?').get(id)),
     loadItems: (id) => db.prepare('SELECT * FROM checklist_items WHERE trip_id = ? ORDER BY category, position').all(id).map(toItem),
   })
-  const trips = createTripsService({ db, config, gamification, notifications })
+  const trips = createTripsService({ db, config, gamification, notifications, push })
   const auth = createAuth(db, config)
 
   const app = express()
   app.disable('x-powered-by')
   app.set('trust proxy', 'loopback')
 
-  // Raw body is needed to verify the WhatsApp webhook signature
-  app.use('/api/webhooks/whatsapp', express.raw({ type: 'application/json', limit: '1mb' }))
   app.use(express.json({ limit: '100kb' }))
   app.use((req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff')
@@ -54,14 +48,14 @@ export function createApp(config, { db = openDatabase(config.dbPath), fetchImpl,
   api.use(auth.requireClientHeader)
   api.use(rateLimit({ name: 'api', windowMs: 60000, max: 240 }))
 
-  // Signed single-trip links (from WhatsApp) — scoped capability, verified on every request
+  // Signed single-trip links (from notifications) — scoped capability, verified on every request
   api.use((req, _res, next) => {
     const token = req.get('X-Trip-Access')
     if (token) req.linkTripId = links.verify(token)
     next()
   })
 
-  api.get('/health', (_req, res) => res.json({ ok: true, whatsapp: config.whatsapp.mode, ai: config.ai.enabled && config.ai.hasCredentials }))
+  api.get('/health', (_req, res) => res.json({ ok: true, push: push.enabled, ai: config.ai.enabled && config.ai.hasCredentials }))
   api.get('/rules', (_req, res) => res.json(publicRules(config.scoring)))
 
   api.post(
@@ -170,7 +164,7 @@ export function createApp(config, { db = openDatabase(config.dbPath), fetchImpl,
   )
   api.get('/trips/:id/messages', auth.requireUser, (req, res) => res.json(trips.messages(req, req.params.id)))
 
-  // ── Web push: backup notifications when WhatsApp can't deliver ──
+  // ── Web push: trip reminders and checklist updates in the notification bar ──
   const pushSubscription = z.object({
     endpoint: z.string().url().startsWith('https://').max(1000),
     keys: z.object({ p256dh: z.string().min(16).max(200), auth: z.string().min(8).max(100) }),
@@ -202,7 +196,7 @@ export function createApp(config, { db = openDatabase(config.dbPath), fetchImpl,
     handler(async (req, res) => {
       const r = await push.notifyUser(req.user.id, {
         title: 'ORBIT notifications are on',
-        body: 'If WhatsApp can’t reach you, your trip reminders will appear here.',
+        body: 'Your trip reminders will appear here.',
         url: '/trips',
         tag: 'orbit-test',
       })
@@ -210,39 +204,6 @@ export function createApp(config, { db = openDatabase(config.dbPath), fetchImpl,
       res.json(r)
     }),
   )
-
-  // ── WhatsApp webhook (Meta): verification handshake + delivery statuses ──
-  app.get('/api/webhooks/whatsapp', (req, res) => {
-    const ok =
-      config.whatsapp.webhookVerifyToken &&
-      req.query['hub.mode'] === 'subscribe' &&
-      req.query['hub.verify_token'] === config.whatsapp.webhookVerifyToken
-    return ok ? res.status(200).send(String(req.query['hub.challenge'] ?? '')) : res.sendStatus(403)
-  })
-  app.post('/api/webhooks/whatsapp', (req, res) => {
-    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('')
-    const secret = config.whatsapp.appSecret
-    const sig = req.get('X-Hub-Signature-256') || ''
-    const expected = `sha256=${crypto.createHmac('sha256', secret || 'unset').update(raw).digest('hex')}`
-    if (!secret || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
-      return res.sendStatus(401)
-    }
-    let body
-    try {
-      body = JSON.parse(raw.toString('utf8'))
-    } catch {
-      return res.sendStatus(400)
-    }
-    let updated = 0
-    for (const entry of body?.entry ?? []) {
-      for (const change of entry?.changes ?? []) {
-        for (const s of change?.value?.statuses ?? []) {
-          updated += notifications.applyStatus({ id: s.id, status: s.status, errorTitle: s.errors?.[0]?.title })
-        }
-      }
-    }
-    res.json({ ok: true, updated })
-  })
 
   app.use('/api', api)
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found.')))

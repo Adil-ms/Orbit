@@ -34,15 +34,3 @@ export function errorMiddleware(err, req, res, _next) {
     ...(err.details ? { details: err.details } : {}),
   })
 }
-
-/** Masks a phone number for logs and UI: +91•••••1234 */
-export function maskPhone(e164) {
-  if (!e164) return ''
-  return `${e164.slice(0, 3)}${'•'.repeat(Math.max(0, e164.length - 7))}${e164.slice(-4)}`
-}
-
-export function normalizeE164(input) {
-  const digits = String(input || '').replace(/[^\d+]/g, '')
-  const cleaned = digits.startsWith('+') ? `+${digits.slice(1).replace(/\+/g, '')}` : `+${digits}`
-  return /^\+[1-9]\d{7,14}$/.test(cleaned) ? cleaned : null
-}

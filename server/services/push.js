@@ -1,8 +1,8 @@
 import webpush from 'web-push'
 
 /**
- * Web Push (VAPID) — a backup channel that shows trip reminders in the phone's notification bar
- * when WhatsApp can't deliver. Subscriptions belong to a user (all their browsers/devices).
+ * Web Push (VAPID) — shows trip reminders and checklist updates in the phone's notification bar.
+ * Subscriptions belong to a user (all their browsers/devices).
  * `sendImpl` is injectable so tests never call a real push service.
  */
 export function createPush({ db, config, sendImpl = webpush.sendNotification }) {

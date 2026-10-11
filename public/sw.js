@@ -1,4 +1,4 @@
-// ORBIT service worker — only handles push notifications (the backup channel for WhatsApp reminders).
+// ORBIT service worker — only handles push notifications (trip reminders and checklist updates).
 // It deliberately does no caching, so it never serves stale app files.
 
 self.addEventListener('install', () => self.skipWaiting())

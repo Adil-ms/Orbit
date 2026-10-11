@@ -1,7 +1,7 @@
 import { api } from '../services/orbitApi'
 
 /**
- * Browser side of web push (the backup channel when WhatsApp can't deliver).
+ * Browser side of web push: trip reminders and checklist updates in the notification bar.
  * Needs HTTPS (or localhost). On iPhone, web push only works after "Add to Home Screen".
  */
 export const pushSupported = () =>
@@ -34,6 +34,15 @@ export async function enablePush() {
   const existing = await reg.pushManager.getSubscription()
   const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toKey(publicKey) }))
   await api.pushSubscribe(sub.toJSON())
+}
+
+/** Re-registers this browser's existing subscription with the server (e.g. after the session changed). */
+export async function syncPush() {
+  const reg = await navigator.serviceWorker.getRegistration('/')
+  const sub = await reg?.pushManager.getSubscription()
+  if (!sub || Notification.permission !== 'granted') return false
+  await api.pushSubscribe(sub.toJSON())
+  return true
 }
 
 export async function disablePush() {

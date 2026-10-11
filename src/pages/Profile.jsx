@@ -100,7 +100,7 @@ export default function Profile() {
           <ul className="mt-3 space-y-2 text-sm text-muted">
             <li>Your account is a private guest session tied to this browser — no email or password needed.</li>
             <li>ORBIT never asks for passport, visa or ticket numbers, and blocks long numbers in item names.</li>
-            <li>WhatsApp numbers are kept only while reminders are on for a trip, and are masked everywhere in the app.</li>
+            <li>Reminders are sent only to devices where you turn notifications on. Turn them off any time from a trip’s Reminders panel or your browser settings.</li>
           </ul>
         </section>
       </div>

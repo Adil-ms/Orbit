@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
-import { ArrowLeft, CalendarClock, Info, ListChecks, LoaderCircle, Plus, ShieldCheck, ShieldQuestion, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarClock, ListChecks, LoaderCircle, Plus, ShieldCheck, ShieldQuestion, Trash2 } from 'lucide-react'
 import Mascot from '../components/mascot/Mascot'
 import { ReadinessRing } from '../components/game/GameUI'
 import ItemCard, { NotNeededItem } from '../components/trips/ItemCard'
@@ -51,7 +51,7 @@ export default function TripChecklist() {
   const [confirm, setConfirm] = useState(null) // { kind: 'item' | 'trip', item? }
   const eventTimer = useRef(null)
 
-  // Signed WhatsApp link: remember it for this tab, then strip it from the address bar
+  // Signed trip link (from a notification): remember it for this tab, then strip it from the address bar
   useEffect(() => {
     const token = searchParams.get('access')
     if (token) {
@@ -160,7 +160,7 @@ export default function TripChecklist() {
       </div>
     )
   }
-  if (status === 'notfound') return <NotFound title="We couldn’t find that trip" text="It may have been deleted, or the link has expired. Links from WhatsApp work for 72 hours." />
+  if (status === 'notfound') return <NotFound title="We couldn’t find that trip" text="It may have been deleted, or the link has expired. Trip links work for 72 hours." />
   if (status === 'error') {
     return (
       <div className="mx-auto max-w-lg px-4 py-20 text-center">
@@ -233,17 +233,8 @@ export default function TripChecklist() {
                 <p className="font-bold">
                   Requirement status: {readiness.requirements.verified} of {readiness.requirements.total} entry requirements confirmed by you
                 </p>
-                <p className="mt-0.5 text-sm text-muted">
-                  A full checklist doesn’t mean you meet entry rules. Confirm each requirement with the official source — ORBIT never decides visa, permit or health rules for you.
-                </p>
               </div>
             </div>
-          )}
-
-          {trip.checklistSource === 'rules' && isOwner && (
-            <p className="flex items-center gap-2 text-sm text-muted">
-              <Info className="size-4 shrink-0" /> Checklist built from ORBIT’s travel rules. AI suggestions appear when the server has an AI key configured.
-            </p>
           )}
 
           {/* Toolbar */}
@@ -414,7 +405,7 @@ export default function TripChecklist() {
         title={confirm?.kind === 'trip' ? 'Delete this trip?' : 'Remove this item?'}
         description={
           confirm?.kind === 'trip'
-            ? 'The checklist and any scheduled WhatsApp reminders will be deleted.'
+            ? 'The checklist and any scheduled reminders will be deleted.'
             : `“${confirm?.item?.title}” will be removed from your checklist.`
         }
       >

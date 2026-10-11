@@ -22,7 +22,6 @@ CREATE TABLE trips (
   name TEXT,
   destination_city TEXT NOT NULL,
   destination_country TEXT NOT NULL,      -- ISO 3166-1 alpha-2
-  nationality TEXT,                       -- ISO 3166-1 alpha-2, optional
   purpose TEXT NOT NULL,
   departure_local TEXT NOT NULL,          -- 'YYYY-MM-DDTHH:MM' wall-clock time
   departure_tz TEXT NOT NULL,             -- IANA zone the wall-clock time is in

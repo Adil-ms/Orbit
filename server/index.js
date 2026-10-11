@@ -7,7 +7,7 @@ const { app, notifications, db } = createApp(config)
 notifications.start()
 const server = app.listen(config.port, () => {
   console.log(`[orbit] API listening on http://localhost:${config.port}`)
-  console.log(`[orbit] WhatsApp mode: ${config.whatsapp.mode}${config.whatsapp.mode === 'mock' ? ' (messages are recorded, not sent)' : ''}`)
+  console.log(`[orbit] Push notifications: ${config.push.publicKey && config.push.privateKey && config.push.subject ? 'on' : 'off — set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (and VAPID_SUBJECT)'}`)
   console.log(`[orbit] AI checklist: ${config.ai.enabled && config.ai.hasCredentials ? config.ai.model : 'off — rule-based checklists only'}`)
 })
 

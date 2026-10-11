@@ -9,7 +9,7 @@ export function makeConfig(overrides = {}) {
     dbPath: ':memory:',
     linkSecret: 'test-secret',
     ai: { ...base.ai, enabled: false },
-    whatsapp: { ...base.whatsapp, mode: 'mock', appSecret: 'app-secret', webhookVerifyToken: 'verify-me' },
+    push: { publicKey: 'test-public-key', privateKey: 'test-private-key', subject: 'https://orbit.example' },
     schedulerIntervalMs: 999999,
     ...overrides,
   }
@@ -19,7 +19,8 @@ export function makeConfig(overrides = {}) {
 export async function boot(overrides = {}, opts = {}) {
   const config = makeConfig(overrides)
   const db = openDatabase(':memory:')
-  const ctx = createApp(config, { db, ...opts })
+  // Never reach a real push service from tests; individual tests pass their own fake to inspect sends
+  const ctx = createApp(config, { db, pushSendImpl: async () => {}, ...opts })
   const server = await new Promise((resolve) => {
     const s = ctx.app.listen(0, () => resolve(s))
   })

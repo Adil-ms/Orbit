@@ -1,4 +1,4 @@
--- Web push subscriptions: the backup channel when WhatsApp can't deliver a reminder or update.
+-- Web push subscriptions: where trip reminders and checklist updates are delivered.
 -- One row per browser/device; push services remove expired ones (404/410) and we delete them too.
 CREATE TABLE push_subscriptions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
