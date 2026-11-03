@@ -1,13 +1,15 @@
 import { Link } from 'react-router'
-import { useId } from 'react'
+import { useId, useMemo } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { LoaderCircle, LocateFixed, MapPin, ShieldCheck, X } from 'lucide-react'
+import { Clock, LoaderCircle, LocateFixed, MapPin, ShieldCheck, X } from 'lucide-react'
 import Chip from '../ui/Chip'
 import Notice from '../ui/Notice'
 import { BUDGET_OPTIONS, BUFFER_OPTIONS, DURATION_OPTIONS, INTERESTS, LIMITS, MOODS } from '../../data/options'
-import { HUBS } from '../../data/adventures'
-import { haversineKm } from '../../lib/planner'
+import { minutesUntil, resolveStart } from '../../lib/planner'
+import { formatClock, formatMinutes } from '../../lib/format'
+import { describeCurrentLocation, searchLocal } from '../../services/locationService'
 import { useGeolocation } from '../../hooks/useGeolocation'
+import { useNow } from '../../hooks/useNow'
 import { useOrbitStore } from '../../store/useOrbitStore'
 import { cn } from '../../lib/ui'
 
@@ -195,13 +197,18 @@ export function LocationField({ compact = false, error }) {
   async function useCurrentLocation() {
     const coords = await geo.request()
     if (!coords) return
-    const nearest = HUBS.map((h) => ({ h, km: haversineKm(coords, h.coords) })).sort((a, b) => a.km - b.km)[0]
-    const label = nearest.km <= 25 ? `Current location · near ${nearest.h.name}` : 'Current location'
+    const { label } = describeCurrentLocation(coords)
     update({ location: { label, coords, source: 'geo' } })
   }
 
   function onType(value) {
-    update({ location: { label: value, coords: null, source: 'manual' } })
+    const resolved = resolveStart({ label: value })
+    let coords = resolved.coords
+    if (!coords && value.trim().length >= 3) {
+      const match = searchLocal(value)[0]
+      if (match?.coords) coords = match.coords
+    }
+    update({ location: { label: value, coords: coords ?? null, source: coords ? 'manual' : 'text' } })
   }
 
   const usingGeo = location.source === 'geo' && location.coords
@@ -220,7 +227,7 @@ export function LocationField({ compact = false, error }) {
             type="text"
             value={location.label}
             onChange={(e) => onType(e.target.value)}
-            placeholder="e.g. New Delhi Railway Station"
+            placeholder="e.g. Eiffel Tower, Paris or Times Square, NY or Connaught Place, Delhi"
             autoComplete="off"
             aria-invalid={Boolean(error)}
             aria-describedby={error ? errId : undefined}
@@ -262,25 +269,13 @@ export function LocationField({ compact = false, error }) {
         <>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
             <Link to="/adventure/discover" className="inline-flex min-h-11 items-center gap-1 font-bold text-sky-600 hover:underline sm:min-h-0">
-              In Kerala? Discover real places near you →
+              Discover places around you →
             </Link>
-            <span className="text-muted">Demo stations:</span>
-            {HUBS.map((h) => (
-              <button
-                key={h.id}
-                type="button"
-                onClick={() => onType(h.name)}
-                className="inline-flex min-h-11 cursor-pointer items-center rounded-full bg-cream-200/70 px-3 py-1 font-medium sm:min-h-8 text-navy transition hover:bg-orange-50 hover:text-orange-700"
-              >
-                {h.name}
-              </button>
-            ))}
           </div>
           <p className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-muted">
             <ShieldCheck className="mt-px size-4 shrink-0 text-success-700" />
-            Location is only requested when you tap the button. Adventure planning stays in this browser and coordinates are
-            never stored on an ORBIT server. “Discover Kerala” nearby search sends them to OpenStreetMap’s public Overpass
-            service, and map tiles load from OpenStreetMap.
+            Location is only requested when you tap the button. Adventure planning coordinates are never stored on an ORBIT server.
+            Map tiles and nearby place data load securely from OpenStreetMap.
           </p>
         </>
       )}
@@ -293,31 +288,92 @@ export function DeadlineField({ error }) {
   const update = useOrbitStore((s) => s.updatePreferences)
   const id = useId()
   const errId = useId()
+  const now = useNow(30000)
+
+  const setOffset = (mins) => {
+    const target = new Date(now + mins * 60000)
+    const hh = String(target.getHours()).padStart(2, '0')
+    const mm = String(target.getMinutes()).padStart(2, '0')
+    update({ deadline: `${hh}:${mm}` })
+  }
+
+  const remaining = useMemo(() => {
+    if (!deadline) return null
+    return minutesUntil(deadline, new Date(now))
+  }, [deadline, now])
+
+  const PRESETS = [
+    { label: '+30 min', mins: 30 },
+    { label: '+45 min', mins: 45 },
+    { label: '+1 hour', mins: 60 },
+    { label: '+2 hours', mins: 120 },
+    { label: '+3 hours', mins: 180 },
+    { label: '+4 hours', mins: 240 },
+  ]
+
   return (
     <div>
-      <label htmlFor={id} className="sr-only">
-        Return-by time
-      </label>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold tracking-wider text-muted uppercase">Quick presets from now:</span>
+        <div className="flex flex-wrap gap-1.5">
+          {PRESETS.map((p) => (
+            <button
+              key={p.mins}
+              type="button"
+              onClick={() => setOffset(p.mins)}
+              className="cursor-pointer rounded-full bg-cream-200/70 px-3 py-1 text-xs font-semibold text-navy/80 ring-1 ring-navy/10 transition hover:bg-sky hover:text-white"
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="flex max-w-sm gap-2">
-        <input
-          id={id}
-          type="time"
-          value={deadline}
-          onChange={(e) => update({ deadline: e.target.value })}
-          aria-invalid={Boolean(error)}
-          aria-describedby={error ? errId : undefined}
-          className={cn(inputCls, 'flex-1')}
-        />
+        <div className="relative flex-1">
+          <label htmlFor={id} className="sr-only">
+            Return-by time
+          </label>
+          <input
+            id={id}
+            type="time"
+            value={deadline}
+            onChange={(e) => update({ deadline: e.target.value })}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? errId : undefined}
+            className={cn(inputCls, 'w-full')}
+          />
+        </div>
         {deadline && (
           <button
             type="button"
             onClick={() => update({ deadline: '' })}
-            className="h-12 cursor-pointer rounded-xl px-4 text-sm font-semibold text-muted ring-1 ring-navy/12 hover:text-navy"
+            className="h-12 cursor-pointer rounded-xl px-4 text-sm font-semibold text-muted ring-1 ring-navy/12 transition hover:text-navy"
           >
             Clear
           </button>
         )}
       </div>
+
+      {remaining && !remaining.rolled && (
+        <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-sky-50 px-3.5 py-2 text-sm text-sky-900 ring-1 ring-sky/20">
+          <Clock className="size-4 shrink-0 text-sky-600" />
+          <span>
+            Remaining free time: <strong className="font-bold">{formatMinutes(remaining.minutes)}</strong> until{' '}
+            <strong className="font-bold">{formatClock(remaining.target)}</strong>
+          </span>
+        </div>
+      )}
+
+      {remaining && remaining.rolled && remaining.minutes <= 12 * 60 && (
+        <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-amber-50 px-3.5 py-2 text-sm text-amber-900 ring-1 ring-amber/20">
+          <Clock className="size-4 shrink-0 text-amber-600" />
+          <span>
+            Return time tomorrow: <strong className="font-bold">{formatMinutes(remaining.minutes)}</strong> from now ({formatClock(remaining.target)})
+          </span>
+        </div>
+      )}
+
       <FieldError id={errId}>{error}</FieldError>
     </div>
   )

@@ -4,7 +4,7 @@ import AdventureMap from '../map/AdventureMap'
 import Notice from '../ui/Notice'
 import PlaceCard, { PlaceCardSkeleton } from './PlaceCard'
 import { fetchNearbyPlaces, OSM_ATTRIBUTION } from '../../services/nearbyPlacesService'
-import { KERALA_PLACES } from '../../data/keralaPlaces'
+import { DESTINATION_PLACES as KERALA_PLACES } from '../../data/destinations'
 import { withinRadius } from '../../utils/distanceUtils'
 import { buttonClass, cn } from '../../lib/ui'
 
@@ -98,7 +98,7 @@ export default function NearbyPlaces({ origin, radiusKm, onStartHere }) {
       {!loading && places.length === 0 && (
         <div className="mt-4 rounded-3xl bg-white p-8 text-center ring-1 ring-navy/5">
           <p className="font-bold">Nothing found within this radius.</p>
-          <p className="mt-1 text-muted">Try a larger radius, or browse Explore Kerala for destinations further away.</p>
+          <p className="mt-1 text-muted">Try a larger radius, or browse Explore Destinations for spots further away.</p>
         </div>
       )}
       {!loading && state.mode !== 'fallback' && <p className="mt-4 text-xs text-muted">Live data {OSM_ATTRIBUTION}.</p>}

@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import { LoaderCircle, LocateFixed, MapPin, Search, X } from 'lucide-react'
 import Notice from '../ui/Notice'
-import { KERALA_DISTRICTS } from '../../data/keralaPlaces'
+import { WORLD_DESTINATIONS as KERALA_DISTRICTS } from '../../data/destinations'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import { describeCurrentLocation, searchLocal, searchOnline } from '../../services/locationService'
 import { useOrbitStore } from '../../store/useOrbitStore'
@@ -89,7 +89,7 @@ export default function LocationSelector() {
         </button>
         <div>
           <label htmlFor={ids.district} className="sr-only">
-            Choose a Kerala city or district
+            Choose a city or destination
           </label>
           <select
             id={ids.district}
@@ -100,7 +100,7 @@ export default function LocationSelector() {
             }}
             className={cn(inputCls, 'cursor-pointer')}
           >
-            <option value="">Choose a city or district…</option>
+            <option value="">Choose a popular destination…</option>
             {KERALA_DISTRICTS.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name}
